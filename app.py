@@ -30,7 +30,7 @@ from werkzeug.exceptions import HTTPException
 DATA = Path(os.environ.get('BILI_DATA_DIR', '/data'))
 DATA.mkdir(parents=True, exist_ok=True)
 
-# 直播姬接口常量（来自公开的网页端开播脚本，不是账号凭据）
+# 直播姬接口常量（来自公开的网页端开播脚本）
 APPKEY = 'aae92bc66f3edfab'
 APPSEC = 'af125a0d5279fd576c1b4418a3e8276d'
 LIVE_VERSION = os.environ.get('BILI_LIVE_VERSION', '7.47.0.10269')
@@ -390,9 +390,130 @@ def api_status():
     })
 
 
+def _ensure_buvid() -> None:
+    if BILI.cookies.get('buvid3'):
+        return
+    try:
+        response = _bili_get('https://api.bilibili.com/x/frontend/finger/spi',
+                             headers={'referer': 'https://www.bilibili.com/'})
+        data = _json(response).get('data') or {}
+        if data.get('b_3'):
+            BILI.cookies.set('buvid3', data['b_3'], domain='.bilibili.com')
+        if data.get('b_4'):
+            BILI.cookies.set('buvid4', data['b_4'], domain='.bilibili.com')
+        BILI.cookies.set('b_nut', str(int(time.time())), domain='.bilibili.com')
+    except (BiliError, requests.RequestException):
+        pass
+
+
+WBI_TAB = [46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
+           27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
+           37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4,
+           22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52]
+_WBI = {'key': '', 'at': 0.0}
+
+
+def _wbi_key() -> str:
+    now = time.time()
+    if _WBI['key'] and now - _WBI['at'] < 3600:
+        return _WBI['key']
+    try:
+        response = _bili_get('https://api.bilibili.com/x/web-interface/nav',
+                             headers={'referer': 'https://www.bilibili.com/'})
+        data = _json(response).get('data') or {}
+        images = data.get('wbi_img') or {}
+        img_key = str(images.get('img_url') or '').rsplit('/', 1)[-1].split('.')[0]
+        sub_key = str(images.get('sub_url') or '').rsplit('/', 1)[-1].split('.')[0]
+        if img_key and sub_key:
+            original = img_key + sub_key
+            _WBI['key'] = ''.join(original[i] for i in WBI_TAB if i < len(original))[:32]
+            _WBI['at'] = now
+    except (BiliError, requests.RequestException):
+        pass
+    return _WBI['key']
+
+
+def _wbi_sign(params: dict) -> dict:
+    signed = dict(params)
+    key = _wbi_key()
+    if not key:
+        return signed
+    signed['wts'] = int(time.time())
+    query = urlencode([(name, ''.join(ch for ch in str(value) if ch not in "!'()*"))
+                      for name, value in sorted(signed.items())])
+    signed['w_rid'] = hashlib.md5((query + key).encode('utf-8')).hexdigest()
+    return signed
+
+
 @app.get('/api/partitions')
 def api_partitions():
     return jsonify(_partitions())
+
+
+@app.get('/api/danmu-token')
+def api_danmu_token():
+    if not _logged_in():
+        raise BiliError('请先登录 B 站账号')
+    _ensure_buvid()
+    room = str(request.args.get('room_id') or STATE['config'].get('room_id') or '').strip()
+    if not room.isdigit():
+        raise BiliError('缺少房间号')
+    params = _wbi_sign({'id': room, 'type': 0, 'web_location': '444.8'})
+    response = _bili_get(
+        'https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo',
+        params=params,
+        headers={'referer': 'https://live.bilibili.com/' + room,
+                 'origin': 'https://live.bilibili.com'})
+    data = _json(response).get('data') or {}
+    token = data.get('token')
+    hosts = data.get('host_list') or []
+    if not token or not hosts:
+        raise BiliError('获取弹幕 token 失败')
+    host = hosts[0]
+    uid = 0
+    try:
+        uid = int((_nav() or {}).get('uid') or 0)
+    except (TypeError, ValueError):
+        uid = 0
+    return jsonify({
+        'token': token,
+        'host': host.get('host') or 'broadcastlv.chat.bilibili.com',
+        'port': int(host.get('wss_port') or 443),
+        'uid': uid,
+        'buvid': BILI.cookies.get('buvid3', ''),
+        'room_id': room,
+    })
+
+
+@app.post('/api/danmaku')
+def api_danmaku():
+    if not _logged_in() or not _csrf():
+        raise BiliError('请先登录 B 站账号')
+    body = request.get_json(silent=True) or {}
+    room = str(body.get('room_id') or STATE['config'].get('room_id') or '').strip()
+    text = str(body.get('text') or '').strip()
+    if not room.isdigit():
+        raise BiliError('房间号必须是数字')
+    if not text:
+        raise BiliError('弹幕内容不能为空')
+    if len(text) > 40:
+        raise BiliError('弹幕内容不能超过 40 字')
+    csrf = _csrf()
+    payload = {
+        'bubble': 0,
+        'color': 16777215,
+        'fontsize': 25,
+        'mode': 1,
+        'msg': text,
+        'roomid': room,
+        'rnd': int(time.time()),
+        'csrf': csrf,
+        'csrf_token': csrf,
+    }
+    value = _json(_bili_post('https://api.live.bilibili.com/msg/send', payload,
+                             headers=LIVE_HEADERS))
+    data = value.get('data') or {}
+    return jsonify({'ok': True, 'mode': data.get('mode'), 'text': text})
 
 
 @app.get('/api/room/auto')

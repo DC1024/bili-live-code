@@ -4,4 +4,7 @@ __pycache__/
 .env
 data/
 live2d/
+voice/
+breeze.env
+*.wav
 preview.jpg

@@ -1,3 +1,6 @@
 # 无头推流的额外依赖（WebUI 本身不需要）
 # 系统依赖：ffmpeg、中文字体（例如 Debian/Ubuntu 的 fonts-wqy-microhei）
+# 可选语音/弹幕互动需要 brotli 与 websocket-client
 Pillow==10.4.0
+brotli>=1.1.0
+websocket-client>=1.7.0

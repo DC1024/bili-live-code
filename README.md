@@ -16,8 +16,13 @@ B 站直播推流码 WebUI + 无头三栏推流器。用网页完成扫码登录
 - 人脸验证：`60024` 显示二维码，`60043` 给出外部验证链接
 - WebUI 密码保护、CSRF 校验、Cookie 以 `0600` 保存
 - 无头推流：1920×1080、三栏布局，画面来自桌面/手机截图代理
-- 推流码超过 4 分钟未使用会自动忽略，避免用旧码反复重试
+- 推流码超过 4 分钟且直播间未开播时自动忽略，避免用旧码反复重试
 - 可选活动回执栏（SQLite）和可选 Live2D 透明 PNG 叠加
+- 可选语音（固定文案预渲染 + Breeze TTS 动态回复）
+- 可接 B 站直播间 WebSocket：进场/关注/礼物/上舰/醒目留言/弹幕
+- 可选弹幕自动文字回复（经 WebUI 以登录账号发送，限流）
+- 可选场景轮换（全景 → 电脑特写 → 电脑+手机）、定时自主播报、可见工作队列
+- 画面故障自愈（唤醒手机、重置桌面屏保）与断流告警 Webhook
 
 ## 目录结构
 
@@ -25,10 +30,18 @@ B 站直播推流码 WebUI + 无头三栏推流器。用网页完成扫码登录
 app.py                     WebUI / B 站接口封装
 templates/                 登录页与操作页
 streamer.py                无头推流器（截图、合成、ffmpeg）
+speech.py                  语音播放（预渲染 WAV + Breeze TTS 动态合成）
+chat_watch.py              弹幕监听、语音回复与文字回复
+bili_ws.py                 直播间 WebSocket 客户端
+event_speak.py             空间事件 → 固定语音
+monologue.py               定时自主播报
+live_work.py               可见工作队列（桌面终端执行命令）
+voice_lines.py             固定语音文案
+render_voice_lines.py      一次性生成固定语音 WAV
 Dockerfile                 WebUI 镜像
 docker-compose.yml         WebUI 部署
 requirements.txt           WebUI 依赖
-requirements-streamer.txt  推流器额外依赖（Pillow）
+requirements-streamer.txt  推流器额外依赖
 ```
 
 ## 快速开始（WebUI）
@@ -75,6 +88,20 @@ image: ghcr.io/dc1024/bili-live-code:latest
 BILI_LIVE_VERSION=7.55.0.10548
 BILI_LIVE_BUILD=10548
 ```
+
+### 发送弹幕接口
+
+WebUI 提供一个受登录与 CSRF 保护的接口，供推流器自动回复使用：
+
+```http
+POST /api/danmaku
+Content-Type: application/json
+X-CSRF: <登录页里的 CSRF token>
+
+{"room_id": "123456", "text": "你好呀"}
+```
+
+文本最长 40 字；未登录或 CSRF 不匹配会返回 401/403。
 
 ### WebUI 配置
 
@@ -165,8 +192,8 @@ python3 streamer.py --preview
 | `HER_PC_TOKEN_FILE` | `<STREAM_DATA_DIR>/her-agent.token` | 桌面代理 Bearer token |
 | `ANDROID_TOKEN_FILE` | `<STREAM_DATA_DIR>/android.token` | 手机代理 Bearer token |
 | `SPACE_DB` | 空 | 活动回执 SQLite 路径；不设置则右栏只显示提示 |
-| `STREAM_FPS` | `5` | 合成与推流帧率 |
-| `STREAM_STALE_SECONDS` | `240` | 推流码过期阈值（秒） |
+| `STREAM_FPS` | `10` | 合成与推流帧率 |
+| `STREAM_STALE_SECONDS` | `240` | 推流码过期阈值（秒）；直播间仍在直播时不受此限制 |
 | `STREAM_TITLE` | `B站直播 · 三栏画面` | 画面左上角标题 |
 | `STREAM_SUBTITLE` | 空 | 画面右下角小字 |
 | `STREAM_FONT` | 自动查找 | 中文字体路径 |
@@ -174,8 +201,17 @@ python3 streamer.py --preview
 | `STREAM_LIVE2D_DIR` | `<STREAM_DATA_DIR>/live2d` | Live2D 透明帧目录；不存在则关闭 |
 | `STREAM_LIVE2D_FPS` | `10` | Live2D 序列帧率 |
 | `LIVE2D_CREDIT` | 空 | 画面底部署名/版权行 |
+| `STREAM_TTS` | `1` | 是否启用语音（固定文案 + 动态 TTS） |
+| `STREAM_VOICE_DIR` | `<STREAM_DATA_DIR>/voice` | 预渲染 WAV 与动态合成缓存目录 |
+| `BREEZE_ENV` | `<STREAM_DATA_DIR>/breeze.env` | Breeze TTS 凭据文件 |
+| `STREAM_LIVE_WORK` | `1` | 是否启用可见工作队列 |
+| `STREAM_SCENE_ROTATION` | `1` | 是否每 240 秒轮换场景 |
+| `STREAM_ALERT_URL` | 空 | 断流告警 Webhook（飞书文本机器人格式） |
+| `STREAM_MENTIONS` | `主播` | 触发弹幕回复的关键词，逗号分隔 |
+| `HER_PC_DISPLAY` | `:99` | 桌面自愈时 `xset` 使用的 DISPLAY |
+| `STREAM_TERM_USER` / `STREAM_TERM_DISPLAY` / `STREAM_TERM_HOME` / `STREAM_TERM_BANNER` | `her` / `:99` / `/home/her` / `远程桌面 · 自动任务` | 工作队列终端参数 |
 
-推流参数固定为 1920×1080、H.264 3500k、静音 AAC，可在 `StreamSession.start()` 里调整。
+推流参数固定为 1920×1080、H.264 3500k、AAC 128k；启用语音时音频来自 FFmpeg FIFO，否则为静音 AAC。可在 `StreamSession.start()` 里调整。
 
 ### systemd 示例
 
@@ -218,6 +254,72 @@ WantedBy=multi-user.target
 - 用 `LIVE2D_CREDIT` 写明模型作者与授权信息
 
 **本仓库不包含任何 Live2D 模型或预渲染帧。** 模型版权与公开直播授权由使用者自行确认；多数免费模型要求署名，但禁止重新分发模型文件。
+
+## 可选：语音与动态 TTS
+
+推流器支持两层语音：
+
+1. **固定文案**：`voice_lines.py` 列出 18 条常用文案（开播、任务完成、设备操作、感谢关注等），
+   `render_voice_lines.py` 一次性调用 Breeze TTS 生成 `<STREAM_VOICE_DIR>/*.wav`。
+2. **动态回复**：直播间的问候/提问只对选中的弹幕实时合成，结果按文本哈希缓存在
+   `<STREAM_VOICE_DIR>/cache/`，同一句话不会重复计费。
+
+Breeze 凭据写在 `<STREAM_DATA_DIR>/breeze.env`（权限建议 `0600`）：
+
+```bash
+BREEZE_API_KEY=...
+BREEZE_VOICE_ID=...
+# 可选
+BREEZE_MODEL_ID=breeze-tts-2
+```
+
+生成固定语音：
+
+```bash
+python3 render_voice_lines.py
+# 输出 voice/*.wav
+```
+
+没有 WAV 或没有 Breeze 凭据时，推流器仍可正常运行，只是没有声音。
+
+## 可选：弹幕互动
+
+`bili_ws.py` 通过 WebUI 的 `/api/danmu-token` 获取 token 后连接直播间 WebSocket，
+监听进场、关注、礼物、上舰、醒目留言和普通弹幕。`chat_watch.py` 会：
+
+- 对礼物/关注/上舰/醒目留言播放预渲染语音（带限流）
+- 对问候、提问、提到关键词的弹幕播放语音回应
+- 如配置了 WebUI 密码，还会通过 `/api/danmaku` 以登录账号发送一条简短文字回复
+
+限流：语音 15 秒一条、同一用户 30 秒、文字回复 20 秒一条；连续失败 3 次暂停 10 分钟；
+自己账号发出的消息不会触发回复，避免自循环。
+
+> 自动发弹幕属于账号操作，B 站可能有额外风控；建议先在无人房间测试。
+
+## 可选：场景轮换、自主播报与工作队列
+
+三项功能默认开启，可通过环境变量关闭：
+
+- **场景轮换**（`STREAM_SCENE_ROTATION=0`）：每 240 秒在「全景 → 电脑特写 → 电脑+手机」之间切换。
+- **定时自主播报**（由 `STREAM_TTS` 控制）：开播 120 秒后首播，之后每 360 秒播报时间、直播时长和
+  `SPACE_DB` 里的任务数；没有 `SPACE_DB` 时使用通用文案。
+- **可见工作队列**（`STREAM_LIVE_WORK=0`）：开播 90 秒后首条，之后每 300 秒在桌面终端里真实执行
+  只读命令（`date`、`df`、`free`、`ps` 等）；`SPACE_DB` 显示有运行中任务时自动跳过。
+
+工作队列需要一个**可交互的终端**（不是只打印横幅的装饰窗口），并通过桌面代理的
+`/exec`（`xdotool`）和 `/action`（`type`/`key`）操作。终端不存在时会自动创建；
+容器/桌面用户与 `DISPLAY` 用 `STREAM_TERM_USER`、`STREAM_TERM_DISPLAY` 指定。
+
+## 自愈与断流告警
+
+- 手机画面连续失败会自动调用手机代理 `/key`（`wake`）唤醒屏幕
+- 电脑画面连续失败会通过桌面代理执行 `xset -display <HER_PC_DISPLAY> s off -dpms` 并点击画面唤醒
+- FFmpeg 连续 3 次在 20 秒内退出，或直播间状态变为未开播（`live_status=2`）时写入 `ALERT` 日志
+- 设置 `STREAM_ALERT_URL` 后会同时 POST 一条飞书文本机器人消息：
+
+```json
+{"msg_type": "text", "content": {"text": "直播提醒：..."}}
+```
 
 ## 安全
 
