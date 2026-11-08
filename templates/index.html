@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>B站直播推流码 WebUI</title>
+<style>
+:root{--bg:#0f1115;--card:#171a20;--line:#2a2f3a;--text:#e8eaf0;--muted:#9aa3b2;--accent:#00a1d6;--accent2:#0b7fa6;--danger:#ff5c5c;--ok:#3ddc97;--warn:#ffbd59}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:1120px;margin:0 auto;padding:22px}
+header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:18px}
+h1{font-size:22px;margin:0}
+.sub{color:var(--muted);font-size:12px;margin-top:4px}
+.pills{display:flex;gap:8px;flex-wrap:wrap}
+.pill{border:1px solid var(--line);background:var(--card);padding:6px 10px;border-radius:999px;font-size:12px;color:var(--muted)}
+.pill b{color:var(--text);font-weight:600}
+.pill.ok{border-color:#1f6b4b;color:var(--ok)}
+.pill.live{border-color:#7a3a3a;color:var(--danger)}
+.grid{display:grid;grid-template-columns:1.15fr .85fr;gap:16px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+.card h2{font-size:15px;margin:0 0 12px;display:flex;align-items:center;gap:8px}
+.hint{color:var(--muted);font-size:12px}
+label{display:block;color:var(--muted);font-size:12px;margin:10px 0 5px}
+input,select,textarea{width:100%;background:#0e1117;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:9px 10px;font:inherit;outline:none}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+textarea{min-height:74px;resize:vertical}
+button{border:0;border-radius:8px;padding:10px 14px;font:inherit;font-weight:600;cursor:pointer;color:#fff;background:var(--accent)}
+button:hover{background:var(--accent2)}
+button:disabled{opacity:.5;cursor:not-allowed}
+button.ghost{background:#232833;color:var(--text);border:1px solid var(--line)}
+button.danger{background:#a83232}
+button.small{padding:6px 10px;font-size:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row > input{flex:1;min-width:160px}
+.qrbox{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+.qr{width:200px;height:200px;background:#fff;border-radius:10px;padding:8px;display:none}
+.qr img{width:100%;height:100%;object-fit:contain}
+.qrmsg{color:var(--muted);font-size:13px;margin-top:8px}
+.warn{border:1px solid #6b5420;background:#211c12;color:var(--warn);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.6}
+.ok{border:1px solid #1f6b4b;background:#11211a;color:var(--ok);border-radius:10px;padding:10px 12px;font-size:12px}
+.stream{display:none}
+.field{display:flex;gap:8px;align-items:center;margin:8px 0}
+.field input{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px}
+.field button{white-space:nowrap}
+.log{max-height:160px;overflow:auto;background:#0e1117;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:12px;color:var(--muted)}
+.log div{margin:3px 0}
+.log .bad{color:var(--danger)}
+.log .good{color:var(--ok)}
+details{margin-top:10px}
+summary{cursor:pointer;color:var(--muted);font-size:12px}
+footer{color:var(--muted);font-size:11px;margin-top:18px;line-height:1.7}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div>
+<h1>B站直播推流码</h1>
+<div class="sub">独立开播/下播工具 · 视频仍由 OBS/ffmpeg 推送</div>
+</div>
+<div class="pills">
+<span class="pill" id="loginPill">账号：<b id="loginText">检查中</b></span>
+<span class="pill" id="livePill">直播：<b id="liveText">未知</b></span>
+<span class="pill" id="roomPill">房间：<b id="roomText">-</b></span>
+</div>
+</header>
+
+<div class="grid">
+<div>
+<section class="card" id="accountCard">
+<h2>① 账号</h2>
+<div id="loggedOut">
+<div class="row">
+<button id="qrBtn" type="button">扫码登录</button>
+<button id="qrRefreshBtn" class="ghost" type="button" style="display:none">刷新二维码</button>
+</div>
+<div class="qrbox" style="margin-top:12px">
+<div class="qr" id="qrBox"><img id="qrImg" alt="B 站登录二维码"></div>
+<div style="flex:1;min-width:180px">
+<div class="qrmsg" id="qrMsg">用哔哩哔哩手机 App 扫码，并在手机上确认登录。</div>
+<details>
+<summary>扫码不方便？手动粘贴 Cookie</summary>
+<textarea id="cookieInput" placeholder="SESSDATA=...; bili_jct=...; 其他 Cookie 可一并粘贴"></textarea>
+<div class="row" style="margin-top:8px"><button id="cookieBtn" class="ghost" type="button">保存 Cookie</button></div>
+</details>
+</div>
+</div>
+</div>
+<div id="loggedIn" style="display:none">
+<div class="ok" id="loginOk">已登录</div>
+<div class="row" style="margin-top:10px">
+<button id="logoutBtn" class="ghost" type="button">退出账号</button>
+</div>
+</div>
+</section>
+
+<section class="card">
+<h2>② 直播间</h2>
+<label for="roomId">房间号</label>
+<div class="row">
+<input id="roomId" inputmode="numeric" placeholder="例如 1131218755">
+<button id="autoRoomBtn" class="ghost" type="button">自动获取</button>
+</div>
+<label for="title">直播标题</label>
+<input id="title" maxlength="40" placeholder="我的直播间">
+<label for="areaSelect">直播分区</label>
+<select id="areaSelect"><option value="">加载分区中…</option></select>
+<label for="areaManual">或手动填写分区 ID</label>
+<input id="areaManual" inputmode="numeric" placeholder="默认 624（虚拟主播）">
+<div class="hint" style="margin-top:8px">分区 ID 可在 B 站直播中心开播设置里查看；手动填写会覆盖下拉选择。</div>
+</section>
+</div>
+
+<div>
+<section class="card">
+<h2>③ 开播 / 下播</h2>
+<div class="warn" style="margin-bottom:12px">必须用本页的“停止直播”下播。OBS 里点停止推流不会关闭 B 站直播间。</div>
+<div class="row">
+<button id="startBtn" type="button" disabled>开始直播</button>
+<button id="stopBtn" class="danger" type="button" disabled>停止直播</button>
+</div>
+<div class="hint" id="startHint" style="margin-top:8px">登录后可用。</div>
+<div class="warn" id="faceBox" style="display:none;margin-top:10px">
+  <div id="faceText"></div>
+  <img id="faceQr" alt="人脸验证二维码" style="display:none;width:200px;height:200px;background:#fff;padding:8px;border-radius:8px;margin-top:10px">
+  <div id="faceLinkRow" style="display:none;margin-top:8px"><a id="faceLink" href="#" target="_blank" rel="noopener" style="color:#8ecdf5">打开 B 站验证页面</a></div>
+  <div class="row" style="margin-top:10px"><button id="faceRetryBtn" type="button">已完成验证，继续开播</button></div>
+</div>
+<div class="stream" id="streamBox">
+<h2 style="margin-top:16px">④ 推流码</h2>
+<div class="field"><input id="rtmpAddr" readonly><button class="small ghost" data-copy="rtmpAddr" type="button">复制服务器</button></div>
+<div class="field"><input id="rtmpCode" readonly><button class="small ghost" data-copy="rtmpCode" type="button">复制推流码</button></div>
+<div class="field" id="srtRow" style="display:none"><input id="srtAddr" readonly><button class="small ghost" data-copy="srtAddr" type="button">复制 SRT 地址</button></div>
+<div class="field" id="srtCodeRow" style="display:none"><input id="srtCode" readonly><button class="small ghost" data-copy="srtCode" type="button">复制 SRT 码</button></div>
+<div class="hint">把“服务器”和“推流码”分别填到 OBS 的自定义推流里；不要把它们拼在一起。</div>
+</div>
+</section>
+
+<section class="card">
+<h2>日志</h2>
+<div class="log" id="log"></div>
+</section>
+</div>
+</div>
+
+<footer>
+本工具使用 B 站网页端接口获取第三方推流码，不是官方直播姬；平台可能限制账号，请使用专用账号并自行承担风险。Cookie 只保存在本容器 /data，不会写入日志。<br>
+接口逻辑参考 ChaceQC/bilibili_live_stream_code（Apache-2.0）。
+</footer>
+</div>
+
+<script>
+const CSRF = {{ csrf|tojson }};
+const $ = (id) => document.getElementById(id);
+let qrKey = null, qrTimer = null, statusBusy = false, partitionsLoaded = false;
+
+function log(message, kind) {
+  const line = document.createElement('div');
+  line.textContent = (new Date()).toLocaleTimeString() + '  ' + message;
+  if (kind) line.className = kind;
+  $('log').prepend(line);
+  while ($('log').children.length > 80) $('log').lastChild.remove();
+}
+
+async function api(path, options = {}) {
+  const headers = Object.assign({'X-CSRF': CSRF}, options.headers || {});
+  const response = await fetch(path, Object.assign({}, options, {headers, credentials: 'same-origin'}));
+  let data = null;
+  try { data = await response.json(); } catch (e) { data = {error: '返回格式异常'}; }
+  if (response.status === 401) { location.reload(); throw new Error('未登录'); }
+  if (!response.ok) {
+    const error = new Error(data.error || ('HTTP ' + response.status));
+    error.data = data;
+    throw error;
+  }
+  return data;
+}
+
+function setPill(el, text, cls) {
+  el.className = 'pill' + (cls ? ' ' + cls : '');
+  el.querySelector('b').textContent = text;
+}
+
+function liveLabel(status) {
+  if (status === 1) return '直播中';
+  if (status === 0) return '未开播';
+  if (status === 2) return '轮播中';
+  return '未知';
+}
+
+function renderStatus(s) {
+  $('loginText').textContent = s.logged_in ? (s.uname || '已登录') : '未登录';
+  setPill($('loginPill'), s.logged_in ? (s.uname || '已登录') : '未登录', s.logged_in ? 'ok' : '');
+  $('liveText').textContent = liveLabel(s.live_status);
+  setPill($('livePill'), liveLabel(s.live_status), s.live_status === 1 ? 'live' : '');
+  $('roomText').textContent = s.room_id || '-';
+  setPill($('roomPill'), s.room_id || '-', '');
+  $('loggedOut').style.display = s.logged_in ? 'none' : 'block';
+  $('loggedIn').style.display = s.logged_in ? 'block' : 'none';
+  $('loginOk').textContent = '已登录 · ' + (s.uname || '') + (s.uid ? '（UID ' + s.uid + '）' : '');
+  if (s.room_id && !$('roomId').value) $('roomId').value = s.room_id;
+  if (s.title && !$('title').value) $('title').value = s.title;
+  $('startBtn').disabled = !s.logged_in;
+  $('stopBtn').disabled = !s.logged_in;
+  $('startHint').textContent = s.logged_in ? '确认房间号、标题和分区后开始。' : '登录后可用。';
+  if (s.stream) showStream(s.stream);
+  if (s.live_status === 1 && !s.stream) {
+    $('startHint').textContent = '直播仍在进行，但本容器没有本次推流码；如需下播请点“停止直播”。';
+  }
+}
+
+async function loadStatus() {
+  if (statusBusy) return;
+  statusBusy = true;
+  try { renderStatus(await api('/api/status')); }
+  catch (e) { log('状态读取失败：' + e.message, 'bad'); }
+  finally { statusBusy = false; }
+}
+
+async function loadPartitions() {
+  if (partitionsLoaded) return;
+  partitionsLoaded = true;
+  try {
+    const data = await api('/api/partitions');
+    const select = $('areaSelect');
+    select.replaceChildren();
+    if (!Array.isArray(data) || !data.length) {
+      select.append(new Option('未获取到分区，请手动填写 ID', ''));
+      return;
+    }
+    for (const parent of data) {
+      const group = document.createElement('optgroup');
+      group.label = parent.name || ('分区 ' + parent.id);
+      const children = parent.list || parent.children || [];
+      for (const child of children) {
+        group.append(new Option(child.name || String(child.id), String(child.id)));
+      }
+      if (!children.length && parent.id) group.append(new Option(parent.name || String(parent.id), String(parent.id)));
+      select.append(group);
+    }
+  } catch (e) { log('分区列表读取失败：' + e.message, 'bad'); }
+}
+
+function stopQR() {
+  if (qrTimer) { clearInterval(qrTimer); qrTimer = null; }
+}
+
+async function startQR() {
+  stopQR();
+  $('qrBtn').disabled = true;
+  $('qrRefreshBtn').style.display = 'inline-block';
+  $('qrBox').style.display = 'block';
+  $('qrMsg').textContent = '正在生成二维码…';
+  try {
+    const data = await api('/api/qr');
+    qrKey = data.key;
+    $('qrImg').src = data.image;
+    $('qrMsg').textContent = '用哔哩哔哩手机 App 扫码，并在手机上确认登录。';
+    qrTimer = setInterval(pollQR, 2000);
+  } catch (e) {
+    $('qrMsg').textContent = '二维码生成失败：' + e.message;
+    log('二维码生成失败：' + e.message, 'bad');
+  } finally { $('qrBtn').disabled = false; }
+}
+
+async function pollQR() {
+  if (!qrKey) return;
+  try {
+    const data = await api('/api/qr/poll?key=' + encodeURIComponent(qrKey));
+    if (data.status === 'ok') {
+      stopQR();
+      $('qrBox').style.display = 'none';
+      $('qrMsg').textContent = '登录成功：' + (data.uname || '');
+      log('登录成功：' + (data.uname || ''), 'good');
+      await loadStatus();
+      return;
+    }
+    $('qrMsg').textContent = data.message || '等待确认…';
+    if (data.status === 'expired') {
+      stopQR();
+      $('qrMsg').textContent = '二维码已过期，请点“刷新二维码”。';
+    }
+  } catch (e) { $('qrMsg').textContent = '轮询失败：' + e.message; }
+}
+
+async function saveCookie() {
+  const cookie = $('cookieInput').value.trim();
+  if (!cookie) return log('请先粘贴 Cookie', 'bad');
+  try {
+    const data = await api('/api/cookie', {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({cookie})});
+    log('Cookie 已保存：' + (data.uname || ''), 'good');
+    await loadStatus();
+  } catch (e) { log('保存 Cookie 失败：' + e.message, 'bad'); }
+}
+
+async function logout() {
+  try { await api('/api/logout', {method: 'POST'}); } catch (e) {}
+  location.reload();
+}
+
+async function autoRoom() {
+  try {
+    const data = await api('/api/room/auto');
+    $('roomId').value = data.room_id;
+    log('房间号：' + data.room_id, 'good');
+    await loadStatus();
+  } catch (e) { log('获取房间号失败：' + e.message, 'bad'); }
+}
+
+function showStream(stream) {
+  $('streamBox').style.display = 'block';
+  $('rtmpAddr').value = stream.rtmp_addr || '';
+  $('rtmpCode').value = stream.rtmp_code || '';
+  if (stream.srt_addr) {
+    $('srtRow').style.display = 'flex';
+    $('srtAddr').value = stream.srt_addr;
+  }
+  if (stream.srt_code) {
+    $('srtCodeRow').style.display = 'flex';
+    $('srtCode').value = stream.srt_code;
+  }
+}
+
+function hideFaceAuth() {
+  $('faceBox').style.display = 'none';
+  $('faceQr').src = '';
+  $('faceQr').style.display = 'none';
+  $('faceLinkRow').style.display = 'none';
+  $('faceLink').href = '#';
+}
+
+function showFaceAuth(face) {
+  $('faceBox').style.display = 'block';
+  $('faceText').textContent = face.message || '需要完成 B 站人脸验证。';
+  if (face.type === 'qr' && face.qr_image) {
+    $('faceQr').src = face.qr_image;
+    $('faceQr').style.display = 'block';
+    $('faceLinkRow').style.display = 'none';
+  } else if (face.url) {
+    $('faceQr').style.display = 'none';
+    $('faceLinkRow').style.display = 'block';
+    $('faceLink').href = face.url;
+  }
+}
+
+async function startLive() {
+  const room_id = $('roomId').value.trim();
+  const title = $('title').value.trim();
+  const area_v2 = $('areaManual').value.trim() || $('areaSelect').value || '624';
+  if (!room_id) return log('请先填写房间号', 'bad');
+  if (!area_v2) return log('请选择分区或手动填写分区 ID', 'bad');
+  hideFaceAuth();
+  $('startBtn').disabled = true;
+  try {
+    const data = await api('/api/start', {method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({room_id, title, area_v2})});
+    showStream(data.stream);
+    log('已开播，推流码已生成。', 'good');
+    if (data.title_warning) log('标题更新提示：' + data.title_warning, 'bad');
+    await loadStatus();
+  } catch (e) {
+    if (e.data && e.data.face_auth) {
+      showFaceAuth(e.data.face_auth);
+      log('需要完成 B 站验证：' + e.message, 'bad');
+    } else {
+      log('开播失败：' + e.message, 'bad');
+      alert('开播失败：' + e.message);
+    }
+  } finally { $('startBtn').disabled = false; }
+}
+
+async function stopLive() {
+  if (!confirm('确认停止 B 站直播？OBS 里的推流也需要你手动停止。')) return;
+  $('stopBtn').disabled = true;
+  try {
+    await api('/api/stop', {method: 'POST'});
+    $('streamBox').style.display = 'none';
+    log('已停止直播。', 'good');
+    await loadStatus();
+  } catch (e) {
+    log('停止失败：' + e.message, 'bad');
+    alert('停止失败：' + e.message);
+  } finally { $('stopBtn').disabled = false; }
+}
+
+async function copyField(id) {
+  const value = $(id).value;
+  if (!value) return;
+  try { await navigator.clipboard.writeText(value); log('已复制：' + id, 'good'); }
+  catch (e) { log('复制失败，请手动选择', 'bad'); }
+}
+
+$('qrBtn').addEventListener('click', startQR);
+$('qrRefreshBtn').addEventListener('click', startQR);
+$('cookieBtn').addEventListener('click', saveCookie);
+$('logoutBtn').addEventListener('click', logout);
+$('autoRoomBtn').addEventListener('click', autoRoom);
+$('startBtn').addEventListener('click', startLive);
+$('stopBtn').addEventListener('click', stopLive);
+$('faceRetryBtn').addEventListener('click', startLive);
+document.querySelectorAll('[data-copy]').forEach(btn => {
+  btn.addEventListener('click', () => copyField(btn.dataset.copy));
+});
+
+loadStatus();
+loadPartitions();
+setInterval(loadStatus, 5000);
+</script>
+</body>
+</html>

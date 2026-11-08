@@ -1,0 +1,21 @@
+services:
+  bili-live-code:
+    build: .
+    container_name: bili-live-code
+    restart: unless-stopped
+    ports:
+      # 建议只绑定局域网/回环地址，例如 "127.0.0.1:8090:8090"
+      - "8090:8090"
+    environment:
+      TZ: Asia/Shanghai
+      BILI_WEBUI_PASSWORD: ${BILI_WEBUI_PASSWORD:?set BILI_WEBUI_PASSWORD in .env}
+      BILI_DEFAULT_TITLE: ${BILI_DEFAULT_TITLE:-我的直播间}
+      BILI_LIVE_VERSION: ${BILI_LIVE_VERSION:-7.47.0.10269}
+      BILI_LIVE_BUILD: ${BILI_LIVE_BUILD:-10269}
+    volumes:
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
