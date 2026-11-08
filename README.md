@@ -48,6 +48,22 @@ docker compose up -d --build
 3. 点“开始直播”，复制返回的服务器地址和推流码到 OBS，或交给 `streamer.py`。
 4. 下播时回到本页点“停止直播”。OBS 停止推流不会关闭直播间。
 
+### 使用预构建镜像（GHCR）
+
+每次推送到 `main` 会自动构建 `linux/amd64`、`linux/arm64` 镜像：
+
+```bash
+docker pull ghcr.io/dc1024/bili-live-code:latest
+```
+
+把 `docker-compose.yml` 里的 `build: .` 换成：
+
+```yaml
+image: ghcr.io/dc1024/bili-live-code:latest
+```
+
+镜像只包含 WebUI；`streamer.py` 仍建议直接运行在推流主机上（需要 ffmpeg 和截图代理）。
+
 ### 人脸验证
 
 - 返回 `60024`：页面显示二维码，用哔哩哔哩 App 扫码完成验证，再点“继续开播”。
