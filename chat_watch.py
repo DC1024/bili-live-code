@@ -22,6 +22,9 @@ LONG_DIGITS = re.compile(r'\d{8,}')
 GREETINGS = ('你好', '在吗', '嗨', 'hello', 'hi', '早上好', '晚上好', '下午好')
 MENTIONS = tuple(x.strip() for x in os.environ.get('STREAM_MENTIONS', '主播').split(',')
                  if x.strip())
+PRAISE = ('好看', '可爱', '喜欢', '声音', '厉害', '棒', '漂亮')
+TEASE = ('胖', '阿姨', '鱼', '肥')
+NEGATIVE = ('丑', '难听', '垃圾', '滚', '假', '骗')
 
 
 def _clean(text):
@@ -125,6 +128,7 @@ class ChatWatcher(threading.Thread):
                        if webui_url and webui_password else None)
         self._last_reply = 0.0
         self._per_user = {}
+        self._reply_side = 0
 
     def ticker(self):
         return ' · '.join(list(self.recent)[-3:])[:120]
@@ -146,25 +150,25 @@ class ChatWatcher(threading.Thread):
             self.recent.append('进场：' + name)
             if now - self._last_ws < 60:
                 return
-            text = '欢迎 %s 来到直播间。' % name
+            text = '欢迎 %s，找个座儿。' % name
         elif kind == 'follow':
             self.recent.append('关注：' + name)
             if now - self._last_ws < 30:
                 return
-            text = '谢谢 %s 的关注！' % name
+            text = '谢谢 %s 的关注。慢慢处，不急着热闹。' % name
         elif kind == 'gift':
             gift = str(payload.get('gift') or '')[:12]
             count = int(payload.get('num') or 1)
             self.recent.append('礼物：%s 送出 %s×%d' % (name, gift, count))
             if now - self._last_ws < 15:
                 return
-            text = '谢谢 %s 送的 %d 个 %s！' % (name, count, gift)
+            text = '谢谢 %s 送的 %d 个 %s。心意收到了，别乱花钱。' % (name, count, gift)
         elif kind == 'guard':
             gift = str(payload.get('gift') or '')[:12]
             self.recent.append('上舰：%s 开通 %s' % (name, gift))
             if now - self._last_ws < 10:
                 return
-            text = '谢谢 %s 开通了 %s！' % (name, gift)
+            text = '谢谢 %s 开通了 %s。记着了。' % (name, gift)
         elif kind == 'super_chat':
             message = str(payload.get('message') or '')[:40]
             self.recent.append('醒目留言：%s' % name)
@@ -203,13 +207,36 @@ class ChatWatcher(threading.Thread):
             return str(explicit)
         return '%s|%s|%s' % (message.get('timeline'), message.get('uid'), message.get('text'))
 
-    def _reply(self, name, text):
+    def _kind(self, text):
         lowered = text.lower()
         if any(word in lowered for word in GREETINGS):
-            return '%s，你好呀，我在直播。' % name
+            return 'greeting'
+        if any(word in text for word in PRAISE):
+            return 'praise'
+        if any(word in text for word in TEASE):
+            return 'tease'
+        if any(word in text for word in NEGATIVE):
+            return 'negative'
         if '?' in text or '？' in text:
-            return '%s，这个问题我记下来啦，等会儿慢慢想。' % name
-        return '我在呢，%s。' % name
+            return 'question'
+        return 'mention'
+
+    def _reply(self, name, text):
+        kind = self._kind(text)
+        if kind == 'greeting':
+            return '来啦？找个座，别站着。'
+        if kind == 'praise':
+            return '谢谢，这话我爱听。'
+        if kind == 'question':
+            return '说真的，这个我得想想，别急。'
+        self._reply_side = 1 - self._reply_side
+        if kind == 'tease':
+            return ('没大没小，叫名字就行。' if self._reply_side
+                    else '胖是胖了点，但不影响干活。')
+        if kind == 'negative':
+            return ('这话我不接。有气就说事，别拿人撒火。' if self._reply_side
+                    else '这条我听清了，但我不接，换下一个话题。')
+        return '我在，说吧。' if self._reply_side else '嗯——我在听。'
 
     def _handle_chat(self, name, text, uid=0):
         text = _clean(text)
@@ -226,6 +253,9 @@ class ChatWatcher(threading.Thread):
         lowered = text.lower()
         if not (any(word in text for word in MENTIONS)
                 or any(word in lowered for word in GREETINGS)
+                or any(word in text for word in PRAISE)
+                or any(word in text for word in TEASE)
+                or any(word in text for word in NEGATIVE)
                 or '?' in text or '？' in text):
             return
         now = time.monotonic()

@@ -22,6 +22,8 @@ import math
 import os
 import re
 import signal
+import smtplib
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -30,6 +32,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from email.message import EmailMessage
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -54,6 +57,9 @@ TTS_ENABLED = os.environ.get('STREAM_TTS', '1') == '1'
 LIVE_WORK_ENABLED = os.environ.get('STREAM_LIVE_WORK', '1') == '1'
 VOICE_DIR = Path(os.environ.get('STREAM_VOICE_DIR', str(DATA / 'voice')))
 BREEZE_ENV = Path(os.environ.get('BREEZE_ENV', str(DATA / 'breeze.env')))
+ALERT_MAIL_ENV = Path(os.environ.get('ALERT_EMAIL_ENV', str(DATA / 'alert-email.env')))
+SPACE_MAIL_CONFIG = (Path(os.environ['SPACE_MAIL_CONFIG'])
+                     if os.environ.get('SPACE_MAIL_CONFIG') else None)
 
 WEBUI = os.environ.get('BILI_WEBUI_URL', 'http://127.0.0.1:8090').rstrip('/')
 PC_URL = os.environ.get('HER_PC_URL', 'http://127.0.0.1:19990/action')
@@ -215,8 +221,77 @@ def recover_phone() -> bool:
         return False
 
 
+def _mail_config():
+    values = {}
+    try:
+        for line in ALERT_MAIL_ENV.read_text(encoding='utf-8').splitlines():
+            if '=' in line and not line.strip().startswith('#'):
+                key, value = line.split('=', 1)
+                values[key.strip()] = value.strip()
+    except OSError:
+        pass
+    if values.get('SMTP_HOST') and values.get('ALERT_TO'):
+        return {
+            'host': values['SMTP_HOST'],
+            'port': int(values.get('SMTP_PORT') or 465),
+            'ssl': values.get('SMTP_SSL', '1') == '1',
+            'user': values.get('SMTP_USER', ''),
+            'password': values.get('SMTP_PASS', ''),
+            'to': values['ALERT_TO'],
+            'sender': values.get('SMTP_FROM') or values.get('SMTP_USER') or values['ALERT_TO'],
+        }
+    if SPACE_MAIL_CONFIG is None:
+        return None
+    try:
+        data = json.loads(SPACE_MAIL_CONFIG.read_text(encoding='utf-8'))
+        mail = data.get('mail') or {}
+        if mail.get('host') and mail.get('to') and mail.get('user') and mail.get('password'):
+            name = str(mail.get('from_name') or '').strip()
+            sender = str(mail.get('user'))
+            return {
+                'host': str(mail['host']),
+                'port': int(mail.get('port') or 465),
+                'ssl': bool(mail.get('ssl', True)),
+                'user': sender,
+                'password': str(mail['password']),
+                'to': str(mail['to']),
+                'sender': ('%s <%s>' % (name, sender)) if name else sender,
+            }
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
+def send_alert_mail(message: str) -> bool:
+    config = _mail_config()
+    if not config:
+        return False
+    mail = EmailMessage()
+    mail['Subject'] = '直播告警：' + message[:60]
+    mail['From'] = config['sender']
+    mail['To'] = config['to']
+    mail.set_content('%s\n\n时间：%s\n主机：%s' % (
+        message, time.strftime('%Y-%m-%d %H:%M:%S'), socket.gethostname()))
+    try:
+        if config['ssl']:
+            server = smtplib.SMTP_SSL(config['host'], config['port'], timeout=20)
+        else:
+            server = smtplib.SMTP(config['host'], config['port'], timeout=20)
+            server.starttls()
+        if config['user'] and config['password']:
+            server.login(config['user'], config['password'])
+        server.send_message(mail)
+        server.quit()
+        log('alert mail sent to ' + config['to'])
+        return True
+    except Exception as error:
+        log('alert mail failed: ' + str(error)[:120])
+        return False
+
+
 def notify_alert(message: str) -> None:
     log('ALERT ' + message)
+    send_alert_mail(message)
     url = os.environ.get('STREAM_ALERT_URL', '').strip()
     if not url:
         return
@@ -734,6 +809,9 @@ def preview() -> int:
 
 
 def main() -> int:
+    if '--alert-test' in sys.argv:
+        notify_alert('测试告警：邮箱推送配置正常')
+        return 0
     if '--preview' in sys.argv:
         return preview()
     try:
@@ -800,6 +878,8 @@ def main() -> int:
                         current = None
                     if last_state != 'stale':
                         log('live code expired (%ds old); start live again in WebUI' % int(age))
+                        if last_state == 'live':
+                            notify_alert('推流中断，推流码已过期；请检查直播间并重新开播')
                         last_state = 'stale'
                     time.sleep(5)
                     continue

@@ -22,7 +22,7 @@ B 站直播推流码 WebUI + 无头三栏推流器。用网页完成扫码登录
 - 可接 B 站直播间 WebSocket：进场/关注/礼物/上舰/醒目留言/弹幕
 - 可选弹幕自动文字回复（经 WebUI 以登录账号发送，限流）
 - 可选场景轮换（全景 → 电脑特写 → 电脑+手机）、定时自主播报、可见工作队列
-- 画面故障自愈（唤醒手机、重置桌面屏保）与断流告警 Webhook
+- 画面故障自愈（唤醒手机、重置桌面屏保）与断流告警（邮件 + Webhook）
 
 ## 目录结构
 
@@ -38,6 +38,7 @@ monologue.py               定时自主播报
 live_work.py               可见工作队列（桌面终端执行命令）
 voice_lines.py             固定语音文案
 render_voice_lines.py      一次性生成固定语音 WAV
+alert-email.env.example    邮箱告警配置模板
 Dockerfile                 WebUI 镜像
 docker-compose.yml         WebUI 部署
 requirements.txt           WebUI 依赖
@@ -207,6 +208,8 @@ python3 streamer.py --preview
 | `STREAM_LIVE_WORK` | `1` | 是否启用可见工作队列 |
 | `STREAM_SCENE_ROTATION` | `1` | 是否每 240 秒轮换场景 |
 | `STREAM_ALERT_URL` | 空 | 断流告警 Webhook（飞书文本机器人格式） |
+| `ALERT_EMAIL_ENV` | `<STREAM_DATA_DIR>/alert-email.env` | 邮箱告警配置；不存在则不发邮件 |
+| `SPACE_MAIL_CONFIG` | 空 | 可选：读取该 JSON 里的 `mail` 段作为邮件配置 |
 | `STREAM_MENTIONS` | `主播` | 触发弹幕回复的关键词，逗号分隔 |
 | `HER_PC_DISPLAY` | `:99` | 桌面自愈时 `xset` 使用的 DISPLAY |
 | `STREAM_TERM_USER` / `STREAM_TERM_DISPLAY` / `STREAM_TERM_HOME` / `STREAM_TERM_BANNER` | `her` / `:99` / `/home/her` / `远程桌面 · 自动任务` | 工作队列终端参数 |
@@ -259,8 +262,9 @@ WantedBy=multi-user.target
 
 推流器支持两层语音：
 
-1. **固定文案**：`voice_lines.py` 列出 18 条常用文案（开播、任务完成、设备操作、感谢关注等），
-   `render_voice_lines.py` 一次性调用 Breeze TTS 生成 `<STREAM_VOICE_DIR>/*.wav`。
+1. **固定文案**：`voice_lines.py` 列出 22 条常用文案（开播、任务完成、设备操作、感谢关注等），
+   分为「表人格」与「里人格」两套口吻，`render_voice_lines.py` 一次性调用 Breeze TTS 生成
+   `<STREAM_VOICE_DIR>/*.wav`。
 2. **动态回复**：直播间的问候/提问只对选中的弹幕实时合成，结果按文本哈希缓存在
    `<STREAM_VOICE_DIR>/cache/`，同一句话不会重复计费。
 
@@ -288,7 +292,8 @@ python3 render_voice_lines.py
 监听进场、关注、礼物、上舰、醒目留言和普通弹幕。`chat_watch.py` 会：
 
 - 对礼物/关注/上舰/醒目留言播放预渲染语音（带限流）
-- 对问候、提问、提到关键词的弹幕播放语音回应
+- 对问候、提问、提到关键词的弹幕播放语音回应，并按夸奖、调侃、负评分成不同语气；
+  同一类回复在两种口吻之间交替，避免机械重复
 - 如配置了 WebUI 密码，还会通过 `/api/danmaku` 以登录账号发送一条简短文字回复
 
 限流：语音 15 秒一条、同一用户 30 秒、文字回复 20 秒一条；连续失败 3 次暂停 10 分钟；
@@ -314,12 +319,24 @@ python3 render_voice_lines.py
 
 - 手机画面连续失败会自动调用手机代理 `/key`（`wake`）唤醒屏幕
 - 电脑画面连续失败会通过桌面代理执行 `xset -display <HER_PC_DISPLAY> s off -dpms` 并点击画面唤醒
-- FFmpeg 连续 3 次在 20 秒内退出，或直播间状态变为未开播（`live_status=2`）时写入 `ALERT` 日志
+- FFmpeg 连续 3 次在 20 秒内退出、推流码过期仍在直播、或直播间状态变为未开播（`live_status=2`）时写入 `ALERT` 日志
 - 设置 `STREAM_ALERT_URL` 后会同时 POST 一条飞书文本机器人消息：
 
 ```json
 {"msg_type": "text", "content": {"text": "直播提醒：..."}}
 ```
+
+- 配置 `alert-email.env` 后会同时发邮件（标题 `直播告警：...`）：
+
+```bash
+cp alert-email.env.example data/alert-email.env
+chmod 600 data/alert-email.env
+# 编辑 SMTP_HOST / SMTP_USER / SMTP_PASS / ALERT_TO
+python3 streamer.py --alert-test   # 发送一封测试邮件
+```
+
+若已有统一配置 JSON，也可以设置 `SPACE_MAIL_CONFIG=/path/to/config.json`，读取其中 `mail` 段的
+`host`、`port`、`ssl`、`user`、`password`、`to`、`from_name`。
 
 ## 安全
 

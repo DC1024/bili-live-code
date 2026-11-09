@@ -75,13 +75,14 @@ class EventSpeaker(threading.Thread):
         if kind == 'task.dispatch':
             if not self._allowed('task_dispatch', 60):
                 return None
-            return 'task_start_li' if persona == 'li' else 'task_start_biao'
+            return 'task_start_li' if persona == '里' else 'task_start_biao'
         if kind == 'task.result':
             status = str(payload.get('status') or '')
+            suffix = '_biao' if persona == '表' else ''
             if status == 'completed':
-                return 'task_done' if self._allowed('task_done', 120) else None
+                return 'task_done' + suffix if self._allowed('task_done', 120) else None
             if status == 'stopped':
-                return 'task_stopped' if self._allowed('task_stopped', 120) else None
+                return 'task_stopped' + suffix if self._allowed('task_stopped', 120) else None
             return None
         if kind == 'context.rotated':
             return 'context_rotated' if self._allowed('context_rotated', 180) else None
@@ -92,10 +93,11 @@ class EventSpeaker(threading.Thread):
             action = str(payload.get('action') or '')
             if action in ('screen', 'shot', 'android_view', 'android_ui', 'health', 'phash'):
                 return None
+            suffix = '_biao' if persona == '表' else ''
             if device == 'desktop':
-                return 'device_desktop' if self._allowed('device_desktop', 180) else None
+                return 'device_desktop' + suffix if self._allowed('device_desktop', 180) else None
             if device == 'phone':
-                return 'device_phone' if self._allowed('device_phone', 180) else None
+                return 'device_phone' + suffix if self._allowed('device_phone', 180) else None
         return None
 
     def run(self):
